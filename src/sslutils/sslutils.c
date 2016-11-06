@@ -98,6 +98,8 @@ Description:
 #include "scutils.h"
 #endif
 
+#include <assert.h>
+
 static int fix_add_entry_asn1_set_param = 0;
 
 
@@ -260,27 +262,27 @@ X509_NAME_cmp_no_set(
     X509_NAME_ENTRY *                   na;
     X509_NAME_ENTRY *                   nb;
 
-    if (sk_X509_NAME_ENTRY_num(a->entries) !=
-        sk_X509_NAME_ENTRY_num(b->entries))
+    if (X509_NAME_entry_count(a) != X509_NAME_entry_count(b))
     {
-        return(sk_X509_NAME_ENTRY_num(a->entries) -
-               sk_X509_NAME_ENTRY_num(b->entries));
+        return(X509_NAME_entry_count(a) - X509_NAME_entry_count(b));
     }
 
-    for (i=sk_X509_NAME_ENTRY_num(a->entries)-1; i>=0; i--)
+    for (i=X509_NAME_entry_count(a)-1; i>=0; i--)
     {
-        na = sk_X509_NAME_ENTRY_value(a->entries,i);
-        nb = sk_X509_NAME_ENTRY_value(b->entries,i);
-        j = na->value->length-nb->value->length;
+        na = X509_NAME_get_entry(a,i);
+        nb = X509_NAME_get_entry(b,i);
+        ASN1_STRING* sa = X509_NAME_ENTRY_get_data(na);
+        ASN1_STRING* sb = X509_NAME_ENTRY_get_data(nb);
+        j = ASN1_STRING_length(sa) - ASN1_STRING_length(sb);
 
         if (j)
         {
             return(j);
         }
 
-        j = memcmp(na->value->data,
-                   nb->value->data,
-                   na->value->length);
+        j = memcmp(ASN1_STRING_get0_data(sa),
+                   ASN1_STRING_get0_data(sb),
+                   ASN1_STRING_length(sa));
         if (j)
         {
             return(j);
@@ -290,11 +292,11 @@ X509_NAME_cmp_no_set(
     /* We will check the object types after checking the values
      * since the values will more often be different than the object
      * types. */
-    for (i=sk_X509_NAME_ENTRY_num(a->entries)-1; i>=0; i--)
+    for (i=X509_NAME_entry_count(a)-1; i>=0; i--)
     {
-        na = sk_X509_NAME_ENTRY_value(a->entries,i);
-        nb = sk_X509_NAME_ENTRY_value(b->entries,i);
-        j = OBJ_cmp(na->object,nb->object);
+        na = X509_NAME_get_entry(a,i);
+        nb = X509_NAME_get_entry(b,i);
+        j = OBJ_cmp(X509_NAME_ENTRY_get_object(na),X509_NAME_ENTRY_get_object(nb));
 
         if (j)
         {
@@ -715,7 +717,7 @@ proxy_genreq(
             goto err;
         }
 
-        if (upkey->type != EVP_PKEY_RSA)
+        if (!EVP_PKEY_get0_RSA(upkey))
         {
             PRXYerr(PRXYERR_F_PROXY_GENREQ,PRXYERR_R_PROCESS_PROXY_KEY);
             goto err;
@@ -801,11 +803,11 @@ proxy_genreq(
     name = NULL;
     X509_REQ_set_pubkey(req,pkey);
 
-    EVP_MD* md = EVP_get_digestbyobj(req->sig_alg->algorithm);
+    EVP_MD const* md = EVP_get_digestbynid(X509_REQ_get_signature_nid(req));
 
     if ( ucert ){
 
-     md = EVP_get_digestbyobj(ucert->sig_alg->algorithm);
+      md = EVP_get_digestbynid(X509_get_signature_nid(ucert));
 
     }
 
@@ -914,14 +916,14 @@ proxy_sign(
 
     unsigned char                       md[SHA_DIGEST_LENGTH];
     unsigned int                        len;
-    EVP_MD*                             sig_algo;
+    EVP_MD const*                       sig_algo;
 
-    sig_algo = EVP_get_digestbyobj(req->sig_alg->algorithm);
+    sig_algo = EVP_get_digestbynid(X509_REQ_get_signature_nid(req));
     if (sig_algo == NULL) sig_algo = EVP_sha1();
 
     if(proxyver>=3) {
       unsigned sub_hash;
-      EVP_MD* cn_sig_algo;
+      EVP_MD const* cn_sig_algo;
       EVP_PKEY* req_public_key;
 
       cn_sig_algo = EVP_sha1();
@@ -1061,38 +1063,23 @@ proxy_sign_ext(
     EVP_PKEY *                          new_public_key = NULL;
     EVP_PKEY *                          tmp_public_key = NULL;
     X509_CINF *                         new_cert_info;
-    X509_CINF *                         user_cert_info;
     X509_EXTENSION *                    extension = NULL;
     time_t                              time_diff, time_now, time_after;
     ASN1_UTCTIME *                      asn1_time = NULL;
     int                                 i;
-    unsigned char                       md[SHA_DIGEST_LENGTH];
     unsigned int                        len;
-    EVP_MD*                             sig_algo;
+    EVP_MD const*                       sig_algo;
 
     sig_algo = EVP_sha1();
 
-    if (!selfsigned)
-      user_cert_info = user_cert->cert_info;
-
     *new_cert = NULL;
 
-    if ((req->req_info == NULL) ||
-        (req->req_info->pubkey == NULL) ||
-        (req->req_info->pubkey->public_key == NULL) ||
-        (req->req_info->pubkey->public_key->data == NULL))
-    {
-        PRXYerr(PRXYERR_F_PROXY_SIGN,PRXYERR_R_MALFORM_REQ);
-        goto err;
-    }
-
-    if ((new_public_key=X509_REQ_get_pubkey(req)) == NULL) {
+    if ((new_public_key=X509_REQ_get0_pubkey(req)) == NULL) {
       PRXYerr(PRXYERR_F_PROXY_SIGN_EXT,PRXYERR_R_MALFORM_REQ);
       goto err;
     }
 
     i = X509_REQ_verify(req,new_public_key);
-    EVP_PKEY_free(new_public_key);
     new_public_key = NULL;
 
     if (i < 0)
@@ -1115,7 +1102,7 @@ proxy_sign_ext(
         goto err;
     }
 
-    new_cert_info = (*new_cert)->cert_info;
+    //    new_cert_info = (*new_cert)->cert_info;
 
     /* set the subject name */
 
@@ -1133,14 +1120,15 @@ proxy_sign_ext(
       BIGNUM *bn = NULL;
       if (BN_hex2bn(&bn, newserial) != 0) {
         ASN1_INTEGER *a_int = BN_to_ASN1_INTEGER(bn, NULL);
-        ASN1_INTEGER_free((*new_cert)->cert_info->serialNumber);
-
-        /* Note:  The a_int == NULL case is handled below. */
-        (*new_cert)->cert_info->serialNumber = a_int;
         BN_free(bn);
+        /* Note:  The a_int == NULL case is handled below. */
+        X509_set_serialNumber(*new_cert, a_int);
+        ASN1_INTEGER_free(a_int);
       }
     }
     else if (proxyver > 2) {
+      unsigned char md[SHA_DIGEST_LENGTH + 1];
+
       ASN1_INTEGER_free(X509_get_serialNumber(*new_cert));
 
       new_public_key = X509_REQ_get_pubkey(req);
@@ -1149,43 +1137,35 @@ proxy_sign_ext(
 #else
       ASN1_digest(i2d_PUBKEY, sig_algo, (char *) new_public_key, md, &len);
 #endif
+      md[len] = '\0';
+
       EVP_PKEY_free(new_public_key);
       new_public_key = NULL;
 
-      (*new_cert)->cert_info->serialNumber = ASN1_INTEGER_new();
-      (*new_cert)->cert_info->serialNumber->length = len;
-      (*new_cert)->cert_info->serialNumber->data   = malloc(len);
-
-      if (!((*new_cert)->cert_info->serialNumber->data)) {
-        PRXYerr(PRXYERR_F_PROXY_SIGN_EXT, PRXYERR_R_PROCESS_PROXY);
-        goto err;
+      BIGNUM* bn = NULL;
+      if (BN_hex2bn(&bn, (char*)md) != 0) {
+        ASN1_INTEGER *a_int = BN_to_ASN1_INTEGER(bn, NULL);
+        BN_free(bn);
+        X509_set_serialNumber(*new_cert, a_int);
+        ASN1_INTEGER_free(a_int);
       }
-      memcpy((*new_cert)->cert_info->serialNumber->data, md, SHA_DIGEST_LENGTH);
+
     }
     else if (selfsigned) {
-      ASN1_INTEGER *copy = ASN1_INTEGER_new();
-      if (copy) {
-        ASN1_INTEGER_set(copy, 1);
-        ASN1_INTEGER_free((*new_cert)->cert_info->serialNumber);
-
-        (*new_cert)->cert_info->serialNumber = copy;
+      ASN1_INTEGER *a_int = ASN1_INTEGER_new();
+      if (a_int) {
+        ASN1_INTEGER_set(a_int, 1);
+        X509_set_serialNumber(*new_cert, a_int);
+        ASN1_INTEGER_free(a_int);
       }
       else
         goto err;
     }
     else {
-      ASN1_INTEGER *copy = ASN1_INTEGER_dup(X509_get_serialNumber(user_cert));
-      ASN1_INTEGER_free((*new_cert)->cert_info->serialNumber);
-
-      /* Note:  The copy == NULL case is handled immediately below. */
-      (*new_cert)->cert_info->serialNumber = copy;
+      ASN1_INTEGER *a_int = ASN1_INTEGER_dup(X509_get0_serialNumber(user_cert));
+      X509_set_serialNumber(*new_cert, a_int);
+      ASN1_INTEGER_free(a_int);
     }
-
-    if (!(*new_cert)->cert_info->serialNumber) {
-      PRXYerr(PRXYERR_F_PROXY_SIGN_EXT,PRXYERR_R_PROCESS_PROXY);
-      goto err;
-    }
-
 
     /* set the issuer name */
 
@@ -1231,7 +1211,8 @@ proxy_sign_ext(
         X509_gmtime_adj(X509_get_notAfter(*new_cert),(long) seconds - pastproxy);
       }
       else {
-        X509_set_notAfter(*new_cert, user_cert_info->validity->notAfter);
+        int e = X509_set1_notAfter(*new_cert, X509_get0_notAfter(user_cert));
+        assert(e == 1 && "X509_set1_notAfter failed");
       }
     }
 
