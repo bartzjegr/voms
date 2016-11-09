@@ -27,7 +27,6 @@
 #include "config.h"
 
 #include <openssl/asn1.h>
-#include <openssl/asn1_mac.h>
 #include <openssl/evp.h>
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
@@ -145,7 +144,7 @@ int writeac(X509 *issuerc, STACK_OF(X509) *issuerstack, X509 *holder, EVP_PKEY *
   issdup              = X509_NAME_dup(name1);
   dirn                = GENERAL_NAME_new();
   dirn2               = GENERAL_NAME_new();
-  holdserial          = M_ASN1_INTEGER_dup(holder->cert_info->serialNumber);
+  holdserial          = ASN1_INTEGER_dup(X509_get_serialNumber(holder));
   serial              = BN_to_ASN1_INTEGER(s, NULL);
   version             = BN_to_ASN1_INTEGER((BIGNUM *)(BN_value_one()), NULL);
   capabilities        = AC_ATTR_new();
@@ -305,12 +304,20 @@ int writeac(X509 *issuerc, STACK_OF(X509) *issuerstack, X509 *holder, EVP_PKEY *
     }
   }
 
-  alg1 = X509_ALGOR_dup(issuerc->cert_info->signature);
-  alg2 = X509_ALGOR_dup(issuerc->sig_alg);
+  alg1 = X509_ALGOR_dup(X509_get0_tbs_sigalg(issuerc));//(issuerc->cert_info->signature));
+  {
+    X509_ALGOR const* sig_alg;
+    X509_get0_signature(NULL, &sig_alg, issuerc);
+    alg2 = X509_ALGOR_dup(sig_alg);
+  }
 
-  if (issuerc->cert_info->issuerUID)
-    if (!(uid = M_ASN1_BIT_STRING_dup(issuerc->cert_info->issuerUID)))
-      ERROR(AC_ERR_MEMORY);
+  {
+    ASN1_BIT_STRING const* issuerUID;
+    X509_get0_uids(issuerc, &issuerUID, NULL);
+    if (issuerUID)
+      if (!(uid = ASN1_STRING_dup(issuerUID)))
+        ERROR(AC_ERR_MEMORY);
+  }
 
 #define FREE_AND_SET(datum, value, type) type##_free((datum)); (datum) = (value)
 
@@ -333,7 +340,7 @@ int writeac(X509 *issuerc, STACK_OF(X509) *issuerstack, X509 *holder, EVP_PKEY *
   a->acinfo->id = uid;
 
   /* Use same signature algorithm used to sign the certificate */
-  EVP_MD *md = EVP_get_digestbyobj(a->sig_alg->algorithm);
+  EVP_MD const* md = EVP_get_digestbyobj(a->sig_alg->algorithm);
 
   if (md == NULL){
     /* fall back to SHA1 */

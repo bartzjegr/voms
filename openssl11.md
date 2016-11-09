@@ -322,21 +322,6 @@ construct the final BIO.
     BIO_set_fd(bio, newsock, BIO_NOCLOSE);
     (void)BIO_set_nbio(bio, 1);
 
-    struct bio_method_st {
-        int type;
-        const char *name;
-        int (*bwrite) (BIO *, const char *, size_t, size_t *);
-        int (*bwrite_old) (BIO *, const char *, int);
-        int (*bread) (BIO *, char *, size_t, size_t *);
-        int (*bread_old) (BIO *, char *, int);
-        int (*bputs) (BIO *, const char *);
-        int (*bgets) (BIO *, char *, int);
-        long (*ctrl) (BIO *, int, long, void *);
-        int (*create) (BIO *);
-        int (*destroy) (BIO *);
-        long (*callback_ctrl) (BIO *, int, bio_info_cb *);
-    };
-
 
 
 ## Removal of macros

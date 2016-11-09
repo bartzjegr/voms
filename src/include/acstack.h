@@ -38,6 +38,8 @@
 #endif
 #endif
 
+# define PREDECLARE_STACK_OF(type) STACK_OF(type);
+
 #define IMPL_STACK(type) \
    DECLARE_STACK_OF(type) \
    STACK_OF(type) *sk_##type##_new (int (*cmp)(const type * const *, const type * const *)) \

@@ -28,7 +28,7 @@
 #include <stdio.h>
 
 #include <openssl/err.h>
-#include <openssl/asn1_mac.h>
+#include <openssl/asn1.h>
 #include <openssl/objects.h>
 
 #include "myproxycertinfo.h"
@@ -38,16 +38,15 @@
 
 myPROXYPOLICY * myPROXYPOLICY_new() 
 {
-  ASN1_CTX                            c;
-  myPROXYPOLICY *                       ret;
+  myPROXYPOLICY* ret = (myPROXYPOLICY*)OPENSSL_malloc(sizeof(myPROXYPOLICY));
 
-  ret = NULL;
+  if (ret)
+  {
+    ret->policy_language = OBJ_nid2obj(OBJ_sn2nid(IMPERSONATION_PROXY_SN));
+    ret->policy = NULL;
+  }
 
-  M_ASN1_New_Malloc(ret, myPROXYPOLICY);
-  ret->policy_language = OBJ_nid2obj(OBJ_sn2nid(IMPERSONATION_PROXY_SN));
-  ret->policy = NULL;
-  return (ret);
-  M_ASN1_New_Error(ASN1_F_PROXYPOLICY_NEW);
+  return ret;
 }
 
 void myPROXYPOLICY_free(myPROXYPOLICY * policy) 
@@ -55,7 +54,7 @@ void myPROXYPOLICY_free(myPROXYPOLICY * policy)
   if(policy == NULL) return;
 
   ASN1_OBJECT_free(policy->policy_language);
-  M_ASN1_OCTET_STRING_free(policy->policy);
+  ASN1_OCTET_STRING_free(policy->policy);
   OPENSSL_free(policy);
 }
 

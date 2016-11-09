@@ -63,7 +63,6 @@ err:
 
 int verify_cert(X509_STORE_CTX *ctx) {
 
-  ctx->check_issued = proxy_check_issued;
   return X509_verify_cert(ctx);
 }
 
@@ -183,9 +182,7 @@ int main(int argc, char* argv[]){
     internal_error("Error creating X.509 store");
   }
 
-  if (!X509_STORE_set_verify_cb_func(store, proxy_verify_callback)){
-    internal_error("Error setting context store certificate verify callback");
-  }
+  X509_STORE_set_verify_cb(store, proxy_verify_callback);
 
   if (!(lookup = X509_STORE_add_lookup(store, X509_LOOKUP_hash_dir()))){
     internal_error("Error creating store CA dir lookup");
@@ -203,6 +200,7 @@ int main(int argc, char* argv[]){
     internal_error("Error creating X509_STORE_CTX object");
   }
 
+  X509_STORE_set_check_issued(store, proxy_check_issued);
   if (X509_STORE_CTX_init(ctx, store, cert, cert_chain) != 1) {
     internal_error("Error initializing verification context");
   }

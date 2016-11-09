@@ -422,6 +422,8 @@ ERR_load_proxy_error_strings(){
     ERR_load_strings(ERR_USER_LIB_PRXYERR_NUMBER,prxyerr_str_functs);
     ERR_load_strings(ERR_USER_LIB_PRXYERR_NUMBER,prxyerr_str_reasons);
   }
+
+  return 0;
 }
 
 /**********************************************************************
@@ -1073,12 +1075,13 @@ proxy_sign_ext(
 
     *new_cert = NULL;
 
-    if ((new_public_key=X509_REQ_get0_pubkey(req)) == NULL) {
+    if ((new_public_key=X509_REQ_get_pubkey(req)) == NULL) {
       PRXYerr(PRXYERR_F_PROXY_SIGN_EXT,PRXYERR_R_MALFORM_REQ);
       goto err;
     }
 
     i = X509_REQ_verify(req,new_public_key);
+    EVP_PKEY_free(new_public_key);
     new_public_key = NULL;
 
     if (i < 0)
@@ -1244,7 +1247,9 @@ proxy_sign_ext(
             PRXYerr(PRXYERR_F_PROXY_SIGN_EXT,PRXYERR_R_DELEGATE_COPY);
             goto err;
           }
+
           int const ret = X509_add_ext(*new_cert, extension, -1);
+
           if (ret == 0)
           {
             PRXYerr(PRXYERR_F_PROXY_SIGN_EXT,PRXYERR_R_DELEGATE_COPY);
@@ -1684,12 +1689,11 @@ proxy_verify_callback(
     int                                 ok,
     X509_STORE_CTX *                    ctx)
 {
-    X509_OBJECT                         obj;
+    X509_OBJECT*                        obj = NULL;
     X509 *                              cert = NULL;
     X509 *                              prev_cert = NULL;
 
     X509_CRL *                          crl;
-    /* X509_CRL_INFO *                     crl_info; */
     X509_REVOKED *                      revoked;
 
     SSL *                               ssl = NULL;
@@ -1828,17 +1832,19 @@ proxy_verify_callback(
 
     if (!itsaproxy)
     {
-
+        obj = X509_OBJECT_new();
         /** CRL checks **/
         int n = 0;
-        if (X509_STORE_get_by_subject(ctx,
-                                      X509_LU_CRL,
-                                      X509_get_subject_name(X509_STORE_CTX_get0_current_issuer(ctx)),
-                                      &obj))
+        if (obj != NULL
+            && X509_STORE_get_by_subject(ctx,
+                                         X509_LU_CRL,
+                                         X509_get_subject_name(X509_STORE_CTX_get0_current_issuer(ctx)),
+                                         obj))
         {
             objset = 1;
-            crl =  obj.data.crl;
-            /* crl_info = crl->crl; */
+            crl =  X509_OBJECT_get0_X509_CRL(obj);
+            assert(crl != NULL && "X509_OBJECT_get0_X509_CRL failed");
+
             /* verify the signature on this CRL */
 
             key = X509_get_pubkey(X509_STORE_CTX_get0_current_issuer(ctx));
@@ -1995,10 +2001,11 @@ proxy_verify_callback(
     {
         for (i=0; i < sk_X509_num(X509_STORE_CTX_get0_chain(ctx)); i++)
         {
-            cert = sk_X509_value(X509_STORE_CTX_get0_chain(ctx),i);
-            if (((i - pvd->proxy_depth) > 1) && (cert->ex_pathlen != -1)
-                && ((i - pvd->proxy_depth) > (cert->ex_pathlen + 1))
-                && (cert->ex_flags & EXFLAG_BCONS))
+#warning the following does not compile, comment for now
+            /* cert = sk_X509_value(X509_STORE_CTX_get0_chain(ctx),i); */
+            /* if (((i - pvd->proxy_depth) > 1) && (cert->ex_pathlen != -1) */
+            /*     && ((i - pvd->proxy_depth) > (cert->ex_pathlen + 1)) */
+            /*     && (cert->ex_flags & EXFLAG_BCONS)) */
             {
               X509_STORE_CTX_set_current_cert(ctx, cert); /* point at failing cert */
               X509_STORE_CTX_set_error(ctx, X509_V_ERR_PATH_LENGTH_EXCEEDED);
@@ -2011,7 +2018,7 @@ proxy_verify_callback(
 
     if (objset)
     {
-      X509_OBJECT_free_contents(&obj);
+      X509_OBJECT_free(obj);
     }
 
     return(ok);
@@ -2025,7 +2032,7 @@ fail_verify:
 
     if (objset)
     {
-      X509_OBJECT_free_contents(&obj);
+      X509_OBJECT_free(obj);
     }
 
     if (X509_STORE_CTX_get_current_cert(ctx))
@@ -2038,9 +2045,10 @@ fail_verify:
         issuer_s = X509_NAME_oneline(
             X509_get_issuer_name(X509_STORE_CTX_get_current_cert(ctx)),NULL,0);
 
-        char *openssl_error_str = X509_verify_cert_error_string(X509_STORE_CTX_get_error(ctx));
+        int const error = X509_STORE_CTX_get_error(ctx);
+        char const* const error_str = X509_verify_cert_error_string(error);
 
-        switch (X509_STORE_CTX_get_error(ctx))
+        switch (error)
         {
             case X509_V_OK:
             case X509_V_ERR_INVALID_PURPOSE:
@@ -2048,7 +2056,7 @@ fail_verify:
                  
               ERR_add_error_data(9,
                     ": ",
-                    openssl_error_str ? openssl_error_str : "",
+                    error_str ? error_str : "",
                     " [file=",
                     ca_policy_file_path ? ca_policy_file_path : "UNKNOWN",
                     ",subject=",
@@ -2059,11 +2067,10 @@ fail_verify:
             break;
             default:
                 PRXYerr(PRXYERR_F_VERIFY_CB,PRXYERR_R_CB_CALLED_WITH_ERROR);
-                char *openssl_error_str = X509_verify_cert_error_string(X509_STORE_CTX_get_error(ctx));
 
                 ERR_add_error_data(7,
                     ": ",
-                    openssl_error_str ? openssl_error_str : "",
+                    error_str ? error_str : "",
                     " [subject=",
                     subject_s ? subject_s : "UNKNOWN",
                     ",issuer=",
@@ -2102,7 +2109,7 @@ proxy_verify_cert_chain(
     int                                 retval = 0;
     X509_STORE *                        cert_store = NULL;
     X509_LOOKUP *                       lookup = NULL;
-    X509_STORE_CTX                      csc;
+    X509_STORE_CTX*                     csc = NULL;
     X509 *                              xcert = NULL;
     X509 *                              scert = NULL;
     int cscinitialized = 0;
@@ -2110,6 +2117,10 @@ proxy_verify_cert_chain(
     scert = ucert;
     cert_store = X509_STORE_new();
     X509_STORE_set_verify_cb_func(cert_store, proxy_verify_callback);
+#if SSLEAY_VERSION_NUMBER >=  0x0090600fL
+    /* override the check_issued with our version */
+    X509_STORE_set_check_issued(cert_store, proxy_check_issued);
+#endif
     if (cert_chain != NULL)
     {
         int i =0;
@@ -2144,18 +2155,15 @@ proxy_verify_cert_chain(
                                         X509_LOOKUP_hash_dir())))
     {
         X509_LOOKUP_add_dir(lookup,pvd->pvxd->certdir,X509_FILETYPE_PEM);
-        X509_STORE_CTX_init(&csc,cert_store,scert,NULL);
+        csc = X509_STORE_CTX_new();
+        X509_STORE_CTX_init(csc,cert_store,scert,NULL);
         cscinitialized = 1;
-#if SSLEAY_VERSION_NUMBER >=  0x0090600fL
-        /* override the check_issued with our version */
-        csc.check_issued = proxy_check_issued;
-#endif
-        X509_STORE_CTX_set_ex_data(&csc,
+        X509_STORE_CTX_set_ex_data(csc,
                                    PVD_STORE_EX_DATA_IDX, (void *)pvd);
 #ifdef X509_V_FLAG_ALLOW_PROXY_CERTS
-        X509_STORE_CTX_set_flags(&csc, X509_V_FLAG_ALLOW_PROXY_CERTS);
+        X509_STORE_CTX_set_flags(csc, X509_V_FLAG_ALLOW_PROXY_CERTS);
 #endif
-        if(!X509_verify_cert(&csc))
+        if(!X509_verify_cert(csc))
         {
             goto err;
         }
@@ -2164,7 +2172,7 @@ proxy_verify_cert_chain(
 
 err:
     if (cscinitialized)
-      X509_STORE_CTX_cleanup(&csc);
+      X509_STORE_CTX_free(csc);
     if (cert_store)
       X509_STORE_free(cert_store);
     return retval;
@@ -3721,7 +3729,7 @@ static int check_critical_extensions(X509 *cert, int itsaproxy)
   int nid_pci3 = my_txt2nid(PROXYCERTINFO_V3);
   int nid_pci4 = my_txt2nid(PROXYCERTINFO_V4);
 
-  STACK_OF(X509_EXTENSION) *extensions = cert->cert_info->extensions;
+  STACK_OF(X509_EXTENSION) *extensions = X509_get0_extensions(cert);
 
   for (i=0; i < sk_X509_EXTENSION_num(extensions); i++) {
     ex = (X509_EXTENSION *) sk_X509_EXTENSION_value(extensions,i);

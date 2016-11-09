@@ -29,7 +29,6 @@
 #include <string.h>
 
 #include <openssl/evp.h>
-#include <openssl/asn1_mac.h>
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 #include <openssl/err.h>

@@ -37,7 +37,6 @@ extern "C" {
 #include <stddef.h>
 #include <openssl/sha.h>
 #include <openssl/asn1.h>
-#include <openssl/asn1_mac.h>
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 #include <openssl/stack.h>
@@ -279,7 +278,7 @@ int validate(X509 *cert, X509 *issuer, AC *ac, voms &v, verify_type valids, time
         CHECK(ac->acinfo->holder->baseid->issuer);
 
         if (ASN1_INTEGER_cmp(ac->acinfo->holder->baseid->serial,
-                             cert->cert_info->serialNumber))
+                             X509_get_serialNumber(cert)))
           ERROR(AC_ERR_HOLDER_SERIAL);
 
         names = ac->acinfo->holder->baseid->issuer;
@@ -289,16 +288,18 @@ int validate(X509 *cert, X509 *issuer, AC *ac, voms &v, verify_type valids, time
           ERROR(AC_ERR_HOLDER);
         if (name->type != GEN_DIRNAME)
           ERROR(AC_ERR_HOLDER);
-        if (X509_NAME_cmp(name->d.dirn, cert->cert_info->subject) &&
-            X509_NAME_cmp(name->d.dirn, cert->cert_info->issuer))
+        if (X509_NAME_cmp(name->d.dirn, X509_get_subject_name(cert)) &&
+            X509_NAME_cmp(name->d.dirn, X509_get_issuer_name(cert)))
           ERROR(AC_ERR_HOLDER);
 
-        if ((!ac->acinfo->holder->baseid->uid && cert->cert_info->issuerUID) ||
-            (!cert->cert_info->issuerUID && ac->acinfo->holder->baseid->uid))
+        ASN1_BIT_STRING const* issuer_uid;
+        X509_get0_uids(cert, &issuer_uid, 0);
+        if ((!ac->acinfo->holder->baseid->uid && issuer_uid) ||
+            (!issuer_uid && ac->acinfo->holder->baseid->uid))
           ERROR(AC_ERR_UID_MISMATCH);
         if (ac->acinfo->holder->baseid->uid) {
-          if (M_ASN1_BIT_STRING_cmp(ac->acinfo->holder->baseid->uid,
-                                    cert->cert_info->issuerUID))
+          if (ASN1_STRING_cmp(ac->acinfo->holder->baseid->uid,
+                                    issuer_uid))
             ERROR(AC_ERR_UID_MISMATCH);
         }
       }    
@@ -310,7 +311,7 @@ int validate(X509 *cert, X509 *issuer, AC *ac, voms &v, verify_type valids, time
           if ((sk_GENERAL_NAME_num(gname) == 1) ||
               ((name = sk_GENERAL_NAME_value(gname,0)) ||
                (name->type != GEN_DIRNAME))) {
-            if (X509_NAME_cmp(name->d.dirn, cert->cert_info->issuer)) {
+            if (X509_NAME_cmp(name->d.dirn, X509_get_issuer_name(cert))) {
               /* CHECK ALT_NAMES */
               /* in VOMS ACs, checking into alt names is assumed to always fail. */
               ERROR(AC_ERR_UID_MISMATCH);
@@ -329,7 +330,7 @@ int validate(X509 *cert, X509 *issuer, AC *ac, voms &v, verify_type valids, time
     if (name->type != GEN_DIRNAME) 
       ERROR(AC_ERR_ISSUER_NAME);
     if (valids & VERIFY_ID)
-      if (X509_NAME_cmp(name->d.dirn, issuer->cert_info->subject))
+      if (X509_NAME_cmp(name->d.dirn, X509_get_subject_name(issuer)))
         ERROR(AC_ERR_ISSUER_NAME);
 
     if (ac->acinfo->serial->length>20)
@@ -578,10 +579,11 @@ static int checkExtensions(STACK_OF(X509_EXTENSION) *exts, X509 *iss, int valids
 
         if (iss) {
           if (key->keyid) {
-            unsigned char hashed[20];
+            unsigned char hashed[SHA_DIGEST_LENGTH];
 
-            if (!SHA1(iss->cert_info->key->public_key->data,
-                      iss->cert_info->key->public_key->length,
+            ASN1_BIT_STRING* pubkey = X509_get0_pubkey_bitstr(iss);
+            if (!SHA1(pubkey->data,
+                      pubkey->length,
                       hashed))
               ret = AC_ERR_EXT_KEY;
           
@@ -593,15 +595,15 @@ static int checkExtensions(STACK_OF(X509_EXTENSION) *exts, X509 *iss, int valids
             if (!(key->issuer && key->serial))
               ret = AC_ERR_EXT_KEY;
           
-            if (M_ASN1_INTEGER_cmp((key->serial),
-                                   (iss->cert_info->serialNumber)))
+            if (ASN1_INTEGER_cmp((key->serial),
+                                (X509_get0_serialNumber(iss))))
               ret = AC_ERR_EXT_KEY;
 	  
             if (key->serial->type != GEN_DIRNAME)
               ret = AC_ERR_EXT_KEY;
 
             if (X509_NAME_cmp(sk_GENERAL_NAME_value((key->issuer), 0)->d.dirn, 
-                              (iss->cert_info->subject)))
+                              (X509_get_subject_name(iss))))
               ret = AC_ERR_EXT_KEY;
           }
         }
